@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+
+  /* ── Healthcare Design Tokens ───────────────────────────────────────── */
+
+  /* healing-green — success states, positive indicators, wellness */
+  --color-healing-green-light:   #e8f5e9;
+  --color-healing-green:         #2e7d32;
+  --color-healing-green-dark:    #1b5e20;
+
+  /* oceanic-blue — informational, primary actions, links */
+  --color-oceanic-blue-light:    #e1f5fe;
+  --color-oceanic-blue:          #0288d1;
+  --color-oceanic-blue-dark:     #01579b;
+
+  /* vitality-red — alerts, critical values, error states */
+  --color-vitality-red-light:    #ffebee;
+  --color-vitality-red:          #d32f2f;
+  --color-vitality-red-dark:     #c62828;
+
+  /* gentle-yellow — warnings, pending states, caution indicators */
+  --color-gentle-yellow-light:   #fffde7;
+  --color-gentle-yellow:         #fbc02d;
+  --color-gentle-yellow-dark:    #f57f17;
+
+  /* calming-neutral — layout surfaces, borders, body text */
+  --color-calming-neutral-canvas: #f8f9fa;
+  --color-calming-neutral-card:   #ffffff;
+  --color-calming-neutral-border: #e9ecef;
+  --color-calming-neutral-text:   #212529;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
