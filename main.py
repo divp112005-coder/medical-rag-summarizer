@@ -38,6 +38,7 @@ from typing import Any                       # Generic type hint for flexible di
 from dotenv import load_dotenv               # Load GROQ_API_KEY from .env file
 from groq import AsyncGroq                   # Official Groq async Python client
 from fastapi import FastAPI, HTTPException   # FastAPI core + structured error responses
+from fastapi.middleware.cors import CORSMiddleware  # Cross-Origin Resource Sharing
 from pydantic import BaseModel, Field        # Request/response validation
 
 # Load .env before os.getenv() calls so GROQ_API_KEY is available immediately
@@ -152,6 +153,19 @@ app = FastAPI(
     ),
     version="0.5.0",
     lifespan=lifespan,
+)
+
+# =============================================================================
+# CORS
+# =============================================================================
+# Allow the Next.js frontend (localhost:3000) — and any other origin during
+# development — to call this API.  Restrict origins in production.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],      # tighten to ["http://localhost:3000"] in prod
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 

@@ -39,10 +39,22 @@ type Report = {
   status: "indexed" | "processing";
 };
 
-type MockReply = {
-  content: string;
-  citations?: Citation[];
-  lowConfidence: boolean;
+// Raw shape returned by the FastAPI /api/query endpoint
+type ApiRetrievedChunk = {
+  rank:        number;
+  score:       number;
+  chunk_id:    string;
+  source_file: string;
+  page_number: number;
+  word_count:  number;
+  text:        string;
+};
+
+type ApiQueryResponse = {
+  llm_summary:           string | null;
+  retrieved_chunks:      ApiRetrievedChunk[];
+  low_confidence_warning: boolean;
+  disclaimer:            string;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -151,75 +163,8 @@ const SEED_MESSAGES: Message[] = [
   },
 ];
 
-const AI_REPLY_POOL: MockReply[] = [
-  {
-    content:
-      "The chest X-ray demonstrated mild cardiomegaly with a cardiothoracic ratio of 0.52. Both lung fields were clear with no consolidation, pleural effusion, or pneumothorax identified.",
-    citations: [
-      {
-        chunkId: "xr_p2_c1",
-        page: 2,
-        source: "RadiologyReport_ChestXR.pdf",
-        snippet:
-          "Cardiothoracic (CT) ratio: 0.52. Mild cardiomegaly noted. Right heart border well-defined. Aortic knuckle prominent. Clinical correlation recommended.",
-      },
-      {
-        chunkId: "xr_p3_c2",
-        page: 3,
-        source: "RadiologyReport_ChestXR.pdf",
-        snippet:
-          "Lung fields: Clear bilaterally. No focal consolidation. No pleural effusion. No evidence of pneumothorax. Vascular markings within normal limits.",
-      },
-    ],
-    lowConfidence: false,
-  },
-  {
-    content: "I cannot find the answer in the provided document.",
-    lowConfidence: true,
-  },
-  {
-    content:
-      "The fasting blood glucose was 118 mg/dL, classifying as impaired fasting glucose per WHO criteria. The treating clinician recommended a repeat OGTT in 3 months alongside lifestyle intervention.",
-    citations: [
-      {
-        chunkId: "lab_p1_c3",
-        page: 1,
-        source: "LabResults_HbA1c_Q2.pdf",
-        snippet:
-          "Fasting plasma glucose: 118 mg/dL (6.6 mmol/L). Classification: Impaired Fasting Glucose (IFG) per WHO criteria (≥ 100 and < 126 mg/dL).",
-      },
-      {
-        chunkId: "lab_p2_c1",
-        page: 2,
-        source: "LabResults_HbA1c_Q2.pdf",
-        snippet:
-          "Recommendation: Repeat oral glucose tolerance test (OGTT) in 3 months. Lifestyle intervention counselling initiated. Dietary referral placed.",
-      },
-    ],
-    lowConfidence: false,
-  },
-  {
-    content:
-      "Current medications include Metformin 500 mg PO twice daily and Atorvastatin 20 mg PO once nightly. A follow-up was scheduled 6 weeks post-assessment.",
-    citations: [
-      {
-        chunkId: "cardiac_p9_c1",
-        page: 9,
-        source: "CardiacAssessment_2024.pdf",
-        snippet:
-          "Metformin 500 mg PO BID (twice daily) — for glycaemic management in T2DM. Patient reports good tolerability. No GI adverse effects documented.",
-      },
-      {
-        chunkId: "cardiac_p9_c2",
-        page: 9,
-        source: "CardiacAssessment_2024.pdf",
-        snippet:
-          "Atorvastatin 20 mg PO QHS (once at bedtime) — initiated for hyperlipidaemia. LFTs to be reviewed at next visit. Patient advised on myopathy symptoms.",
-      },
-    ],
-    lowConfidence: false,
-  },
-];
+// API base URL — FastAPI server
+const API_BASE = "http://127.0.0.1:8000";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Utilities
@@ -333,19 +278,19 @@ function ReferenceCard({ citation }: { citation: Citation }): React.JSX.Element 
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center justify-between gap-3 px-3.5 py-2.5 text-left group"
+        className="w-full flex items-center justify-between gap-[16px] px-[16px] py-[10px] text-left group"
       >
-        <div className="flex items-center gap-2.5 min-w-0">
+        <div className="flex items-center gap-[10px] min-w-0">
           <span
-            className="shrink-0 w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold"
+            className="shrink-0 w-[26px] h-[26px] rounded-[10px] flex items-center justify-center text-[10px] font-bold"
             style={{ background: "#e1f5fe", color: "#0288d1" }}
           >
             {citation.page}
           </span>
-          <span className="font-mono text-[11px] font-semibold text-oceanic-blue truncate">
+          <span className="font-mono text-[10px] font-semibold text-oceanic-blue truncate">
             {citation.chunkId}
           </span>
-          <span className="text-[10px] text-calming-neutral-text hidden sm:block truncate" style={{ opacity: 0.45 }}>
+          <span className="text-[10px] leading-[1.618] text-calming-neutral-text hidden sm:block truncate" style={{ opacity: 0.45 }}>
             {citation.source}
           </span>
         </div>
@@ -357,9 +302,9 @@ function ReferenceCard({ citation }: { citation: Citation }): React.JSX.Element 
         className="overflow-hidden transition-all duration-300"
         style={{ maxHeight: open ? "200px" : "0px", opacity: open ? 1 : 0 }}
       >
-        <div className="px-3.5 pb-3 pt-0.5 border-t border-oceanic-blue-light">
+        <div className="px-[16px] pb-[16px] pt-[10px] border-t border-oceanic-blue-light">
           <blockquote
-            className="text-xs leading-relaxed italic pl-3 border-l-2 border-oceanic-blue"
+            className="text-[10px] leading-[1.618] italic pl-[10px] border-l-2 border-oceanic-blue"
             style={{ color: "#212529", opacity: 0.72 }}
           >
             {citation.snippet}
@@ -380,17 +325,18 @@ function MessageBubble({ message }: { message: Message }): React.JSX.Element {
   if (isUser) {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[76%] flex flex-col items-end gap-1">
+        <div className="max-w-[76%] flex flex-col items-end gap-[10px]">
           <div
-            className="rounded-3xl rounded-tr-lg px-5 py-3.5 shadow-sm"
+            className="px-[26px] py-[16px] shadow-sm"
             style={{
+              borderRadius: "26px 26px 10px 26px",
               background: "linear-gradient(135deg, #e8f5e9 0%, #e1f5fe 100%)",
               color: "#1b5e20",
             }}
           >
-            <p className="text-sm leading-relaxed font-medium">{message.content}</p>
+            <p className="text-[16px] leading-[1.618] font-medium">{message.content}</p>
           </div>
-          <span className="text-[10px] pr-1" style={{ color: "#212529", opacity: 0.35 }}>
+          <span className="text-[10px] leading-[1.618] pr-[10px]" style={{ color: "#212529", opacity: 0.35 }}>
             You · {formatTime(message.timestamp)}
           </span>
         </div>
@@ -400,32 +346,33 @@ function MessageBubble({ message }: { message: Message }): React.JSX.Element {
 
   // AI message
   return (
-    <div className="flex justify-start gap-3">
+    <div className="flex justify-start gap-[16px]">
       {/* Avatar */}
       <div
-        className="shrink-0 w-8 h-8 rounded-2xl flex items-center justify-center shadow-sm mt-0.5"
+        className="shrink-0 w-[42px] h-[42px] flex items-center justify-center shadow-sm"
         style={{
+          borderRadius: "16px",
           background: "linear-gradient(135deg, #2e7d32 0%, #0288d1 100%)",
         }}
       >
-        <IconShield className="w-4 h-4 text-white" />
+        <IconShield className="w-5 h-5 text-white" />
       </div>
 
-      <div className="flex-1 max-w-[80%] flex flex-col gap-2">
+      <div className="flex-1 max-w-[80%] flex flex-col gap-[16px]">
         {/* Label */}
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-bold text-calming-neutral-text" style={{ opacity: 0.7 }}>
+        <div className="flex items-center gap-[16px]">
+          <span className="text-[10px] leading-[1.618] font-bold text-calming-neutral-text" style={{ opacity: 0.7 }}>
             Medical Assistant
           </span>
-          <span className="text-[10px] text-calming-neutral-text" style={{ opacity: 0.35 }}>
+          <span className="text-[10px] leading-[1.618] text-calming-neutral-text" style={{ opacity: 0.35 }}>
             {formatTime(message.timestamp)}
           </span>
           {message.lowConfidence && (
             <span
-              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold"
-              style={{ background: "#ffebee", color: "#c62828" }}
+              className="inline-flex items-center gap-[10px] px-[10px] py-[4px] text-[10px] font-bold"
+              style={{ borderRadius: "10px", background: "#ffebee", color: "#c62828" }}
             >
-              <IconWarning className="w-2.5 h-2.5" />
+              <IconWarning className="w-3 h-3" />
               Low confidence
             </span>
           )}
@@ -433,8 +380,9 @@ function MessageBubble({ message }: { message: Message }): React.JSX.Element {
 
         {/* Bubble */}
         <div
-          className="rounded-3xl rounded-tl-lg px-5 py-4 shadow-sm"
+          className="px-[26px] py-[26px] shadow-sm"
           style={{
+            borderRadius: "26px 26px 26px 10px",
             background: message.lowConfidence
               ? "rgba(255,235,238,0.85)"
               : "rgba(255,255,255,0.88)",
@@ -444,7 +392,7 @@ function MessageBubble({ message }: { message: Message }): React.JSX.Element {
               : "1px solid rgba(233,236,239,0.8)",
           }}
         >
-          <p className="text-sm leading-relaxed text-calming-neutral-text">
+          <p className="text-[16px] leading-[1.618] text-calming-neutral-text">
             {message.content}
           </p>
 
@@ -474,22 +422,23 @@ function MessageBubble({ message }: { message: Message }): React.JSX.Element {
 
 function TypingIndicator(): React.JSX.Element {
   return (
-    <div className="flex justify-start gap-3">
+    <div className="flex justify-start gap-[16px]">
       <div
-        className="shrink-0 w-8 h-8 rounded-2xl flex items-center justify-center shadow-sm"
-        style={{ background: "linear-gradient(135deg, #2e7d32 0%, #0288d1 100%)" }}
+        className="shrink-0 w-[42px] h-[42px] flex items-center justify-center shadow-sm"
+        style={{ borderRadius: "16px", background: "linear-gradient(135deg, #2e7d32 0%, #0288d1 100%)" }}
       >
-        <IconShield className="w-4 h-4 text-white" />
+        <IconShield className="w-5 h-5 text-white" />
       </div>
       <div
-        className="rounded-3xl rounded-tl-lg px-5 py-4 shadow-sm"
+        className="px-[26px] py-[26px] shadow-sm"
         style={{
+          borderRadius: "26px 26px 26px 10px",
           background: "rgba(255,255,255,0.88)",
           backdropFilter: "blur(8px)",
           border: "1px solid rgba(233,236,239,0.8)",
         }}
       >
-        <div className="flex gap-1.5 items-center h-4">
+        <div className="flex gap-[10px] items-center h-4">
           {[0, 160, 320].map((delay) => (
             <span
               key={delay}
@@ -525,8 +474,9 @@ function ReportItem({
       onClick={onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      className="w-full text-left rounded-2xl px-4 py-3.5 transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-oceanic-blue"
+      className="w-full text-left px-[16px] py-[16px] transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-oceanic-blue"
       style={{
+        borderRadius: "16px",
         background: isActive
           ? "linear-gradient(135deg, rgba(46,125,50,0.12) 0%, rgba(2,136,209,0.12) 100%)"
           : hovered
@@ -543,11 +493,12 @@ function ReportItem({
         transform: hovered && !isActive ? "translateX(2px)" : "none",
       }}
     >
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-[16px]">
         {/* Icon badge */}
         <div
-          className="shrink-0 w-9 h-9 rounded-xl flex items-center justify-center"
+          className="shrink-0 w-[42px] h-[42px] flex items-center justify-center"
           style={{
+            borderRadius: "16px",
             background: isActive
               ? "linear-gradient(135deg, #e8f5e9 0%, #e1f5fe 100%)"
               : "rgba(241,245,249,0.9)",
@@ -562,12 +513,12 @@ function ReportItem({
         {/* Meta */}
         <div className="min-w-0 flex-1">
           <p
-            className="text-xs font-semibold truncate"
+            className="text-[16px] leading-[1.618] font-semibold truncate"
             style={{ color: isActive ? "#01579b" : "#212529" }}
           >
             {report.name}
           </p>
-          <p className="text-[10px] mt-0.5 flex items-center gap-1.5" style={{ color: "#212529", opacity: 0.45 }}>
+          <p className="text-[10px] leading-[1.618] mt-[10px] flex items-center gap-[10px]" style={{ color: "#212529", opacity: 0.45 }}>
             <span>{report.pages} pg</span>
             <span>·</span>
             <span>{report.chunks} chunks</span>
@@ -603,18 +554,19 @@ function StatTile({
   const [hovered, setHovered] = useState(false);
   return (
     <div
-      className="flex-1 rounded-2xl px-4 py-3 flex flex-col items-center gap-0.5 transition-all duration-200"
+      className="flex-1 px-[16px] py-[16px] flex flex-col items-center gap-[10px] transition-all duration-200"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
+        borderRadius: "16px",
         background: hovered ? "rgba(255,255,255,0.92)" : "rgba(255,255,255,0.70)",
         border: `1.5px solid ${accent}30`,
         boxShadow: hovered ? `0 4px 16px 0 ${accent}22` : "none",
         transform: hovered ? "translateY(-2px)" : "none",
       }}
     >
-      <p className="text-xl font-extrabold" style={{ color: accent }}>{value}</p>
-      <p className="text-[9px] font-bold uppercase tracking-widest" style={{ color: "#212529", opacity: 0.45 }}>
+      <p className="text-[26px] leading-[1] font-extrabold" style={{ color: accent }}>{value}</p>
+      <p className="text-[10px] leading-[1.618] font-bold uppercase tracking-widest" style={{ color: "#212529", opacity: 0.45 }}>
         {label}
       </p>
     </div>
@@ -628,20 +580,21 @@ function StatTile({
 function LowConfidenceAlert(): React.JSX.Element {
   return (
     <div
-      className="mx-4 mb-3 flex items-start gap-3 rounded-2xl px-4 py-3.5"
+      className="mx-[16px] mb-[16px] flex items-start gap-[16px] px-[16px] py-[16px]"
       role="alert"
       aria-live="polite"
       style={{
+        borderRadius: "16px",
         background: "rgba(255,235,238,0.9)",
         backdropFilter: "blur(8px)",
         border: "1.5px solid rgba(211,47,47,0.25)",
         animation: "fadeSlideIn 0.28s ease-out",
       }}
     >
-      <IconWarning className="w-5 h-5 shrink-0 mt-0.5 text-vitality-red" />
+      <IconWarning className="w-6 h-6 shrink-0 text-vitality-red" />
       <div>
-        <p className="text-sm font-bold text-vitality-red-dark">Low Confidence Response</p>
-        <p className="text-xs text-vitality-red-dark mt-0.5 leading-relaxed" style={{ opacity: 0.75 }}>
+        <p className="text-[16px] leading-[1.618] font-bold text-vitality-red-dark">Low Confidence Response</p>
+        <p className="text-[10px] leading-[1.618] mt-[10px] text-vitality-red-dark" style={{ opacity: 0.75 }}>
           The assistant could not reliably locate an answer within the indexed documents.
           Verify this information with a qualified healthcare professional before acting on it.
         </p>
@@ -657,7 +610,7 @@ function LowConfidenceAlert(): React.JSX.Element {
 function MedicalDisclaimer(): React.JSX.Element {
   return (
     <div
-      className="px-4 py-3 flex items-start gap-2.5"
+      className="px-[16px] py-[16px] flex items-start gap-[10px]"
       role="note"
       aria-label="Medical disclaimer"
       style={{
@@ -665,8 +618,8 @@ function MedicalDisclaimer(): React.JSX.Element {
         borderTop: "1px solid rgba(251,192,45,0.35)",
       }}
     >
-      <span className="text-gentle-yellow shrink-0 mt-0.5">⚕️</span>
-      <p className="text-[10.5px] leading-relaxed text-gentle-yellow-dark">
+      <span className="text-gentle-yellow shrink-0">⚕️</span>
+      <p className="text-[10px] leading-[1.618] text-gentle-yellow-dark">
         <strong>Educational Use Only.</strong> This tool does not constitute professional
         medical advice, diagnosis, or treatment. Always consult a qualified healthcare
         professional before making any medical decisions.
@@ -687,7 +640,8 @@ export default function Home(): React.JSX.Element {
   const [isTyping, setIsTyping] = useState<boolean>(false);
   const [showLowConfidenceAlert, setShowLowConfidenceAlert] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState<boolean>(false);
-  const [replyIndex, setReplyIndex] = useState<number>(0);
+  // networkError holds a short user-visible error string; null = no error
+  const [networkError, setNetworkError] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -700,6 +654,7 @@ export default function Home(): React.JSX.Element {
     const text = inputValue.trim();
     if (!text || isTyping) return;
 
+    // ── 1. Optimistically append the user message to the timeline ─────────
     const userMsg: Message = {
       id: uid(),
       role: "user",
@@ -711,26 +666,78 @@ export default function Home(): React.JSX.Element {
     setInputValue("");
     setIsTyping(true);
     setShowLowConfidenceAlert(false);
+    setNetworkError(null);
 
-    await new Promise<void>((resolve) =>
-      setTimeout(resolve, 1100 + Math.random() * 900)
-    );
+    // ── 2. POST to FastAPI /api/query ─────────────────────────────────────
+    try {
+      const response = await fetch(`${API_BASE}/api/query`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: text }),
+      });
 
-    const reply = AI_REPLY_POOL[replyIndex % AI_REPLY_POOL.length];
-    setReplyIndex((i) => i + 1);
+      // ── 3. Handle non-2xx HTTP status codes gracefully ───────────────────
+      if (!response.ok) {
+        // Surface a user-friendly error without exposing internal details
+        const statusLabel =
+          response.status === 404
+            ? "No documents are indexed yet. Upload a PDF first."
+            : response.status === 503
+            ? "The knowledge base is not ready. Please try again shortly."
+            : `Server returned an unexpected error (HTTP ${response.status}).`;
 
-    const aiMsg: Message = {
-      id: uid(),
-      role: "ai",
-      content: reply.content,
-      citations: reply.citations,
-      lowConfidence: reply.lowConfidence,
-      timestamp: new Date(),
-    };
-    setMessages((prev) => [...prev, aiMsg]);
-    setIsTyping(false);
-    if (reply.lowConfidence) setShowLowConfidenceAlert(true);
-  }, [inputValue, isTyping, replyIndex]);
+        setNetworkError(statusLabel);
+        setIsTyping(false);
+        return;
+      }
+
+      // ── 4. Parse and map the API payload ─────────────────────────────────
+      const data: ApiQueryResponse = await response.json();
+
+      // Map retrieved_chunks → Citation[]  (snake_case → camelCase)
+      const citations: Citation[] = (data.retrieved_chunks ?? []).map(
+        (chunk: ApiRetrievedChunk) => ({
+          chunkId: chunk.chunk_id,
+          page: chunk.page_number,
+          source: chunk.source_file,
+          snippet: chunk.text,
+        })
+      );
+
+      // Derive a safe answer string from llm_summary
+      const answerText: string =
+        data.llm_summary?.trim() ||
+        "The assistant did not return a response. Please try again.";
+
+      // ── 5. Intercept low_confidence_warning ──────────────────────────────
+      const isLowConfidence: boolean = data.low_confidence_warning === true;
+
+      const aiMsg: Message = {
+        id: uid(),
+        role: "ai",
+        content: answerText,
+        // Only attach citation cards when there are retrieved chunks and the
+        // response is not a bare refusal (no meaningful citations to show)
+        citations: citations.length > 0 ? citations : undefined,
+        lowConfidence: isLowConfidence,
+        timestamp: new Date(),
+      };
+
+      setMessages((prev) => [...prev, aiMsg]);
+      if (isLowConfidence) setShowLowConfidenceAlert(true);
+
+    } catch {
+      // ── 6. Graceful catch: network failure, timeout, CORS, JSON parse ────
+      // No console.log — error is surfaced through UI state only.
+      setNetworkError(
+        "Could not reach the medical server. Ensure the API is running at " +
+        `${API_BASE} and try again.`
+      );
+    } finally {
+      // Always re-enable the input regardless of success or failure path
+      setIsTyping(false);
+    }
+  }, [inputValue, isTyping]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -864,13 +871,14 @@ export default function Home(): React.JSX.Element {
             MAIN BODY
         ════════════════════════════════════════════════════════════════ */}
         <div
-          className="flex-1 max-w-screen-xl mx-auto w-full px-4 sm:px-8 py-6 flex gap-5"
+          className="flex-1 max-w-screen-xl mx-auto w-full px-[16px] sm:px-[42px] py-[26px] flex gap-[26px]"
           style={{ minHeight: 0, height: "calc(100vh - 4rem)" }}
         >
 
           {/* ── LEFT PANEL ──────────────────────────────────────────────── */}
           <aside
-            className="hidden lg:flex flex-col w-[17.5rem] shrink-0 gap-4"
+            className="hidden lg:flex flex-col shrink-0 gap-[26px]"
+            style={{ width: "calc(38.2% - 10px)" }}
             aria-label="Document panel"
           >
 
@@ -880,8 +888,9 @@ export default function Home(): React.JSX.Element {
               onDragOver={handleDragOver}
               onDragLeave={() => setIsDragging(false)}
               onDrop={(e) => { e.preventDefault(); setIsDragging(false); }}
-              className="rounded-3xl p-5 flex flex-col items-center gap-3 text-center cursor-pointer transition-all duration-250 shrink-0"
+              className="p-[26px] flex flex-col items-center gap-[16px] text-center cursor-pointer transition-all duration-250 shrink-0"
               style={{
+                borderRadius: "26px",
                 background: isDragging
                   ? "linear-gradient(135deg, rgba(232,245,233,0.95) 0%, rgba(225,245,254,0.95) 100%)"
                   : "rgba(255,255,255,0.75)",
@@ -907,10 +916,10 @@ export default function Home(): React.JSX.Element {
                 />
               </div>
               <div>
-                <p className="text-sm font-bold text-calming-neutral-text">
+                <p className="text-[16px] leading-[1.618] font-bold text-calming-neutral-text">
                   Drop PDF reports here
                 </p>
-                <p className="text-xs mt-1" style={{ color: "#212529", opacity: 0.48 }}>
+                <p className="text-[10px] leading-[1.618] mt-[10px]" style={{ color: "#212529", opacity: 0.48 }}>
                   or{" "}
                   <label className="text-oceanic-blue underline cursor-pointer hover:text-oceanic-blue-dark transition-colors">
                     browse files
@@ -937,8 +946,9 @@ export default function Home(): React.JSX.Element {
 
             {/* Report list card */}
             <div
-              className="flex-1 rounded-3xl p-4 flex flex-col gap-3 overflow-hidden"
+              className="flex-1 p-[26px] flex flex-col gap-[16px] overflow-hidden"
               style={{
+                borderRadius: "26px",
                 background: "rgba(255,255,255,0.72)",
                 backdropFilter: "blur(12px)",
                 border: "1px solid rgba(233,236,239,0.8)",
@@ -973,7 +983,7 @@ export default function Home(): React.JSX.Element {
             </div>
 
             {/* Stats tiles row */}
-            <div className="flex gap-2 shrink-0">
+            <div className="flex gap-[16px] shrink-0">
               <StatTile value={String(totalChunks)} label="Chunks" accent="#0288d1" />
               <StatTile value={String(totalPages)} label="Pages" accent="#2e7d32" />
               <StatTile value={String(reports.length)} label="Docs" accent="#f57f17" />
@@ -983,9 +993,11 @@ export default function Home(): React.JSX.Element {
           {/* ── CHAT PANEL ───────────────────────────────────────────────── */}
           <main
             id="chat-panel"
-            className="flex-1 flex flex-col rounded-3xl overflow-hidden"
+            className="flex flex-col overflow-hidden"
             aria-label="Chat interface"
             style={{
+              width: "calc(61.8% - 16px)",
+              borderRadius: "26px",
               background: "rgba(255,255,255,0.68)",
               backdropFilter: "blur(20px) saturate(1.3)",
               border: "1px solid rgba(233,236,239,0.75)",
@@ -995,28 +1007,29 @@ export default function Home(): React.JSX.Element {
           >
             {/* Chat top bar */}
             <div
-              className="flex items-center justify-between px-6 py-4 shrink-0"
+              className="flex items-center justify-between px-[26px] py-[16px] shrink-0"
               style={{
                 background:
                   "linear-gradient(90deg, rgba(232,245,233,0.55) 0%, rgba(225,245,254,0.55) 100%)",
                 borderBottom: "1px solid rgba(233,236,239,0.65)",
               }}
             >
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-[16px]">
                 <div
-                  className="w-10 h-10 rounded-2xl flex items-center justify-center shadow-md shrink-0"
+                  className="w-[42px] h-[42px] flex items-center justify-center shadow-md shrink-0"
                   style={{
+                    borderRadius: "16px",
                     background: "linear-gradient(135deg, #2e7d32 0%, #0288d1 100%)",
                   }}
                 >
                   <IconShield className="w-5 h-5 text-white" />
                 </div>
                 <div>
-                  <p className="text-sm font-extrabold" style={{ color: "#01579b" }}>
+                  <p className="text-[16px] leading-[1.618] font-extrabold" style={{ color: "#01579b" }}>
                     Medical Assistant
                   </p>
                   <p
-                    className="text-[10px]"
+                    className="text-[10px] leading-[1.618]"
                     style={{ color: "#212529", opacity: 0.42 }}
                   >
                     Powered by llama-3.3-70b-versatile · Groq
@@ -1035,7 +1048,7 @@ export default function Home(): React.JSX.Element {
             {/* Messages area */}
             <div
               id="messages-area"
-              className="flex-1 overflow-y-auto px-6 py-5 space-y-5 min-h-0"
+              className="flex-1 overflow-y-auto px-[26px] py-[26px] space-y-[26px] min-h-0"
               aria-live="polite"
               aria-relevant="additions"
             >
@@ -1051,9 +1064,44 @@ export default function Home(): React.JSX.Element {
             {/* Low confidence alert */}
             {showLowConfidenceAlert && <LowConfidenceAlert />}
 
+            {/* Network / server error banner */}
+            {networkError && (
+              <div
+                className="mx-4 mb-3 flex items-start gap-3 rounded-2xl px-4 py-3.5"
+                role="alert"
+                aria-live="assertive"
+                style={{
+                  background: "rgba(255,253,231,0.92)",
+                  backdropFilter: "blur(8px)",
+                  border: "1.5px solid rgba(251,192,45,0.40)",
+                  animation: "fadeSlideIn 0.28s ease-out",
+                }}
+              >
+                <IconWarning className="w-5 h-5 shrink-0 mt-0.5 text-gentle-yellow-dark" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-bold text-gentle-yellow-dark">Connection Issue</p>
+                  <p
+                    className="text-xs text-gentle-yellow-dark mt-0.5 leading-relaxed"
+                    style={{ opacity: 0.8 }}
+                  >
+                    {networkError}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  aria-label="Dismiss error"
+                  onClick={() => setNetworkError(null)}
+                  className="shrink-0 text-gentle-yellow-dark hover:opacity-60 transition-opacity focus:outline-none"
+                  style={{ fontSize: "18px", lineHeight: 1 }}
+                >
+                  ×
+                </button>
+              </div>
+            )}
+
             {/* Input zone */}
             <div className="shrink-0" style={{ borderTop: "1px solid rgba(233,236,239,0.65)" }}>
-              <div className="px-5 pt-4 pb-2 flex gap-3 items-end">
+              <div className="px-[26px] pt-[16px] pb-[10px] flex gap-[16px] items-end">
                 <textarea
                   ref={inputRef}
                   id="chat-input"
@@ -1064,8 +1112,9 @@ export default function Home(): React.JSX.Element {
                   rows={2}
                   disabled={isTyping}
                   aria-label="Chat input"
-                  className="flex-1 resize-none rounded-2xl px-4 py-3 text-sm transition-all duration-200 disabled:opacity-50 focus:outline-none"
+                  className="flex-1 resize-none px-[16px] py-[16px] text-[16px] leading-[1.618] transition-all duration-200 disabled:opacity-50 focus:outline-none"
                   style={{
+                    borderRadius: "16px",
                     background: "rgba(248,249,250,0.85)",
                     border: "1.5px solid rgba(233,236,239,0.9)",
                     color: "#212529",
