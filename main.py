@@ -82,6 +82,27 @@ MEDICAL_DISCLAIMER = (
 # unavailable so API consumers can programmatically detect a fallback response.
 LLM_UNAVAILABLE_PREFIX = "[LLM unavailable]"
 
+# Cosine-distance threshold for the confidence guardrail.
+#
+# ChromaDB stores cosine *distance* (not similarity): 0 = identical vectors,
+# 2 = perfectly opposite.  all-MiniLM-L6-v2 typical score ranges:
+#
+#   0.00 – 0.30  →  strong match    (question clearly answered by this chunk)
+#   0.30 – 0.55  →  moderate match  (partial or tangential relevance)
+#   0.55 – 0.80  →  weak match      (loosely related topic)
+#   0.80+        →  poor match      (likely off-topic; document may not contain
+#                                    the answer at all)
+#
+# We flag low confidence when the BEST retrieved chunk (rank 1, lowest score)
+# exceeds this threshold, signalling the corpus probably cannot answer the
+# question reliably.  0.55 is the boundary between "moderate" and "weak".
+CONFIDENCE_DISTANCE_THRESHOLD: float = 0.55
+
+# Canonical prefix of the LLM strict-refusal string (RULE 3 in the system
+# prompt).  We detect this in llm_summary to auto-raise the confidence flag
+# even when the top chunk score looked acceptable.
+REFUSAL_PREFIX = "I cannot find the answer in the provided document"
+
 
 # =============================================================================
 # APPLICATION STATE  (module-level cache populated at startup)
@@ -186,6 +207,11 @@ class QueryResponse(BaseModel):
                              fallback string (prefixed '[LLM unavailable]')
                              if the Groq API call failed.
     llm_model              : Groq model ID used for generation.
+    low_confidence_warning : True when the answer may be unreliable because
+                             the best-matching chunk exceeds the cosine-distance
+                             threshold (CONFIDENCE_DISTANCE_THRESHOLD) OR the
+                             LLM triggered its strict refusal string.  Callers
+                             should surface this flag prominently in any UI.
     disclaimer             : Mandatory legal/medical safety disclaimer — ALWAYS
                              present regardless of LLM success or failure.
     """
@@ -205,6 +231,17 @@ class QueryResponse(BaseModel):
     llm_model:  str = Field(
         default=GROQ_MODEL_ID,
         description="Groq model ID used for generation.",
+    )
+    low_confidence_warning: bool = Field(
+        default=False,
+        description=(
+            "True when the answer reliability is questionable. Triggered by either: "
+            "(1) the top retrieved chunk's cosine distance exceeds "
+            f"{CONFIDENCE_DISTANCE_THRESHOLD} (all-MiniLM-L6-v2 scale: 0=identical, "
+            "2=opposite), indicating the document likely does not contain the "
+            "answer; or (2) the LLM returned its strict refusal string. "
+            "Callers should display a prominent warning to the user when True."
+        ),
     )
     disclaimer: str = Field(
         default=MEDICAL_DISCLAIMER,
@@ -525,6 +562,9 @@ async def query_knowledge_base(request: QueryRequest) -> QueryResponse:
     [ Top-K chunks retrieved ]
          |
          v
+    [ STEP 2.5 — Confidence Guardrail: top chunk score vs threshold ]
+         |
+         v
     [ build_messages(): system (5 RAG rules) + user (chunk index + context + question) ]
          |
          v
@@ -532,8 +572,12 @@ async def query_knowledge_base(request: QueryRequest) -> QueryResponse:
          |              model: llama-3.3-70b-versatile  (Groq Inference API)
          |              extract: response.choices[0].message.content
          v
-    [ JSON: retrieved_chunks + llm_summary (cited) + llm_model + disclaimer ]
+    [ JSON: retrieved_chunks + llm_summary + low_confidence_warning + disclaimer ]
     ```
+
+    **Confidence flag**: `low_confidence_warning=True` when the best-matching
+    chunk's cosine distance exceeds `CONFIDENCE_DISTANCE_THRESHOLD` (0.55) OR
+    when the LLM returns its strict refusal string.
 
     **Citation rule**: Every factual claim in `llm_summary` carries
     `[chunk_id: <id>, page: <n>]` immediately after the fact.
@@ -596,6 +640,34 @@ async def query_knowledge_base(request: QueryRequest) -> QueryResponse:
     ]
 
     # ------------------------------------------------------------------
+    # STEP 2.5 — Confidence Guardrail (Phase 2 safety feature)
+    # ------------------------------------------------------------------
+    # Evaluate the top-ranked chunk's cosine distance (rank=1, lowest score).
+    # ChromaDB cosine distance: 0 = identical, 2 = opposite.
+    # all-MiniLM-L6-v2 empirical bands:
+    #   0.00–0.30  strong match  |  0.30–0.55  moderate  |
+    #   0.55–0.80  weak          |  0.80+       poor / off-topic
+    #
+    # We pre-emptively set the flag here based on retrieval quality alone.
+    # It may also be set again after the LLM responds (refusal detection below).
+    low_confidence_warning: bool = False
+
+    if retrieved_chunks:
+        top_score: float = retrieved_chunks[0].score   # rank-1 chunk, lowest distance
+        if top_score > CONFIDENCE_DISTANCE_THRESHOLD:
+            low_confidence_warning = True
+            print(
+                f"[CONFIDENCE]  Low-confidence flag raised: top chunk distance "
+                f"{top_score:.4f} > threshold {CONFIDENCE_DISTANCE_THRESHOLD}. "
+                f"Chunk: {retrieved_chunks[0].chunk_id}"
+            )
+        else:
+            print(
+                f"[CONFIDENCE]  Top chunk distance {top_score:.4f} ≤ "
+                f"{CONFIDENCE_DISTANCE_THRESHOLD} — confidence OK."
+            )
+
+    # ------------------------------------------------------------------
     # STEP 3 — Build the Groq messages array
     # ------------------------------------------------------------------
     # build_messages() returns a list[dict] with two entries:
@@ -640,19 +712,36 @@ async def query_knowledge_base(request: QueryRequest) -> QueryResponse:
         )
 
     # ------------------------------------------------------------------
+    # STEP 5.5 — Refusal-string detection → auto-raise confidence flag
+    # ------------------------------------------------------------------
+    # Even if the retrieval score looked acceptable, the LLM may still
+    # determine the context is insufficient and output the strict refusal
+    # phrase (RULE 3 of the system prompt).  We detect that here and
+    # ensure low_confidence_warning is True in that case as well.
+    if llm_summary and llm_summary.startswith(REFUSAL_PREFIX):
+        if not low_confidence_warning:
+            low_confidence_warning = True
+            print(
+                "[CONFIDENCE]  Low-confidence flag raised: LLM returned "
+                "strict refusal string despite retrieval score passing threshold."
+            )
+
+    # ------------------------------------------------------------------
     # STEP 6 — Return the complete structured JSON response
     # ------------------------------------------------------------------
     # Schema highlights:
-    #   llm_summary — response.choices[0].message.content mapped here
-    #                 (or the descriptive fallback message above)
-    #   llm_model   — GROQ_MODEL_ID for auditability / reproducibility
-    #   disclaimer  — MEDICAL_DISCLAIMER constant, hard-coded and always
-    #                 present; callers cannot remove or override it
+    #   llm_summary            — response.choices[0].message.content mapped here
+    #                            (or the descriptive fallback message above)
+    #   llm_model              — GROQ_MODEL_ID for auditability / reproducibility
+    #   low_confidence_warning — True if retrieval was weak OR LLM refused
+    #   disclaimer             — MEDICAL_DISCLAIMER constant, hard-coded and
+    #                            always present; callers cannot remove it
     return QueryResponse(
         question=request.question,
         total_chunks_retrieved=len(retrieved_chunks),
         retrieved_chunks=retrieved_chunks,
-        llm_summary=llm_summary,           # ← response.choices[0].message.content
+        llm_summary=llm_summary,                    # ← response.choices[0].message.content
         llm_model=GROQ_MODEL_ID,
-        disclaimer=MEDICAL_DISCLAIMER,     # ← mandatory legal/medical safety disclaimer
+        low_confidence_warning=low_confidence_warning,  # ← confidence guardrail flag
+        disclaimer=MEDICAL_DISCLAIMER,              # ← mandatory legal/medical safety disclaimer
     )
