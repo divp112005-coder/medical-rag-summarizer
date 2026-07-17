@@ -38,6 +38,12 @@
   --color-calming-neutral-card:   #ffffff;
   --color-calming-neutral-border: #e9ecef;
   --color-calming-neutral-text:   #212529;
+
+  /* mint / aqua — canvas gradient tones, card overlay bases */
+  --color-mint-50:   #f0fdf4;
+  --color-mint-100:  #dcfce7;
+  --color-aqua-50:   #ecfeff;
+  --color-aqua-100:  #cffafe;
 }
 
 @media (prefers-color-scheme: dark) {

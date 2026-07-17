@@ -1,10 +1,10 @@
 "use client";
 
 // =============================================================================
-// page.tsx — Aegis RAG · Medical Intelligence Hub
-// Full dashboard: sidebar (PDF drop-zone + report list) + chat window with
-// citation accordions, low-confidence warnings, and medical disclaimer.
-// All state is local (useState); zero console logging; pure TypeScript.
+// page.tsx — Medical Intelligence Hub
+// Premium card-based dashboard: soft mint/aqua canvas, translucent white
+// cards, polished report list, citation reference cards, and integrated safety
+// guardrails. All state is local; zero console logging; pure TypeScript.
 // =============================================================================
 
 import React, { useState, useRef, useEffect, useCallback } from "react";
@@ -36,6 +36,7 @@ type Report = {
   chunks: number;
   size: string;
   uploadedAt: string;
+  status: "indexed" | "processing";
 };
 
 type MockReply = {
@@ -45,7 +46,7 @@ type MockReply = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Seed data — pre-loaded mock reports
+// Seed data
 // ─────────────────────────────────────────────────────────────────────────────
 
 const SEED_REPORTS: Report[] = [
@@ -56,6 +57,7 @@ const SEED_REPORTS: Report[] = [
     chunks: 47,
     size: "2.4 MB",
     uploadedAt: "Jul 14, 2026",
+    status: "indexed",
   },
   {
     id: "r2",
@@ -64,6 +66,7 @@ const SEED_REPORTS: Report[] = [
     chunks: 16,
     size: "890 KB",
     uploadedAt: "Jul 16, 2026",
+    status: "indexed",
   },
   {
     id: "r3",
@@ -72,12 +75,9 @@ const SEED_REPORTS: Report[] = [
     chunks: 23,
     size: "5.1 MB",
     uploadedAt: "Jul 17, 2026",
+    status: "indexed",
   },
 ];
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Seed data — initial chat history
-// ─────────────────────────────────────────────────────────────────────────────
 
 const SEED_MESSAGES: Message[] = [
   {
@@ -91,7 +91,7 @@ const SEED_MESSAGES: Message[] = [
     id: "seed-2",
     role: "ai",
     content:
-      "The cardiac assessment revealed a mildly elevated LDL cholesterol level of 148 mg/dL [chunk_id: cardiac_p3_c2, page: 3]. The ejection fraction was measured at 58%, within the normal range [chunk_id: cardiac_p5_c1, page: 5]. No significant ST-segment changes were noted on the resting ECG [chunk_id: cardiac_p7_c3, page: 7].",
+      "The cardiac assessment revealed a mildly elevated LDL cholesterol level of 148 mg/dL. The ejection fraction was measured at 58%, within the normal range. No significant ST-segment changes were noted on the resting ECG.",
     citations: [
       {
         chunkId: "cardiac_p3_c2",
@@ -129,7 +129,7 @@ const SEED_MESSAGES: Message[] = [
     id: "seed-4",
     role: "ai",
     content:
-      "The patient's HbA1c was recorded at 7.2% in Q2 2026 [chunk_id: hba1c_p2_c1, page: 2], indicating suboptimal glycaemic control. The clinical target for most adults with type 2 diabetes is below 7.0% per ADA 2024 standards [chunk_id: hba1c_p3_c2, page: 3].",
+      "The patient's HbA1c was recorded at 7.2% in Q2 2026, indicating suboptimal glycaemic control. The clinical target for most adults with type 2 diabetes is below 7.0% per ADA 2024 standards.",
     citations: [
       {
         chunkId: "hba1c_p2_c1",
@@ -151,14 +151,10 @@ const SEED_MESSAGES: Message[] = [
   },
 ];
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Mock AI reply pool — cycled on every user send
-// ─────────────────────────────────────────────────────────────────────────────
-
 const AI_REPLY_POOL: MockReply[] = [
   {
     content:
-      "The chest X-ray demonstrated mild cardiomegaly with a cardiothoracic ratio of 0.52 [chunk_id: xr_p2_c1, page: 2]. Both lung fields were clear with no consolidation, pleural effusion, or pneumothorax identified [chunk_id: xr_p3_c2, page: 3].",
+      "The chest X-ray demonstrated mild cardiomegaly with a cardiothoracic ratio of 0.52. Both lung fields were clear with no consolidation, pleural effusion, or pneumothorax identified.",
     citations: [
       {
         chunkId: "xr_p2_c1",
@@ -183,7 +179,7 @@ const AI_REPLY_POOL: MockReply[] = [
   },
   {
     content:
-      "The fasting blood glucose was 118 mg/dL [chunk_id: lab_p1_c3, page: 1], classifying as impaired fasting glucose per WHO criteria. The treating clinician recommended a repeat OGTT in 3 months alongside lifestyle intervention [chunk_id: lab_p2_c1, page: 2].",
+      "The fasting blood glucose was 118 mg/dL, classifying as impaired fasting glucose per WHO criteria. The treating clinician recommended a repeat OGTT in 3 months alongside lifestyle intervention.",
     citations: [
       {
         chunkId: "lab_p1_c3",
@@ -204,7 +200,7 @@ const AI_REPLY_POOL: MockReply[] = [
   },
   {
     content:
-      "Current medications include Metformin 500 mg PO twice daily [chunk_id: cardiac_p9_c1, page: 9] and Atorvastatin 20 mg PO once nightly [chunk_id: cardiac_p9_c2, page: 9]. A follow-up was scheduled 6 weeks post-assessment [chunk_id: cardiac_p11_c1, page: 11].",
+      "Current medications include Metformin 500 mg PO twice daily and Atorvastatin 20 mg PO once nightly. A follow-up was scheduled 6 weeks post-assessment.",
     citations: [
       {
         chunkId: "cardiac_p9_c1",
@@ -226,166 +222,156 @@ const AI_REPLY_POOL: MockReply[] = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Utility helpers
+// Utilities
 // ─────────────────────────────────────────────────────────────────────────────
 
 function uid(): string {
   return Math.random().toString(36).slice(2, 10);
 }
 
-// Stable formatter — uses fixed "HH:MM" format to avoid SSR/client mismatch.
 function formatTime(date: Date): string {
   const h = date.getHours().toString().padStart(2, "0");
   const m = date.getMinutes().toString().padStart(2, "0");
   return `${h}:${m}`;
 }
 
-// Renders children only after the first client-side paint to avoid hydration
-// mismatches for any time/date values that differ between server and browser.
-function ClientOnly({ children }: { children: React.ReactNode }): React.JSX.Element | null {
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
-  if (!mounted) return null;
-  return <>{children}</>;
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
-// Sub-component: Animated ECG pulse icon
+// SVG Icon library (inline, zero deps)
 // ─────────────────────────────────────────────────────────────────────────────
 
-function EcgPulseIcon(): React.JSX.Element {
+function IconEcg({ className }: { className?: string }): React.JSX.Element {
   return (
-    <svg
-      viewBox="0 0 80 28"
-      className="w-20 h-7"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      style={{ animation: "ecgDraw 2.4s ease-in-out infinite" }}
-    >
+    <svg viewBox="0 0 80 28" className={className} fill="none" stroke="currentColor"
+      strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+      style={{ animation: "ecgDraw 2.4s ease-in-out infinite" }} aria-hidden="true">
       <polyline points="0,14 12,14 17,4 22,24 27,14 36,14 41,2 46,26 51,14 60,14 65,9 70,19 75,14 80,14" />
     </svg>
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Sub-component: Report card in sidebar
-// ─────────────────────────────────────────────────────────────────────────────
-
-function ReportCard({
-  report,
-  isActive,
-  onClick,
-}: {
-  report: Report;
-  isActive: boolean;
-  onClick: () => void;
-}): React.JSX.Element {
+function IconDocument({ className }: { className?: string }): React.JSX.Element {
   return (
-    <button
-      type="button"
-      id={`report-${report.id}`}
-      onClick={onClick}
-      className={[
-        "w-full text-left rounded-xl px-4 py-3 border transition-all duration-200",
-        "focus:outline-none focus-visible:ring-2 focus-visible:ring-oceanic-blue",
-        isActive
-          ? "bg-oceanic-blue border-oceanic-blue shadow-md"
-          : "bg-calming-neutral-card border-calming-neutral-border hover:border-oceanic-blue hover:shadow-sm",
-      ].join(" ")}
-    >
-      <div className="flex items-start gap-3">
-        <span className="text-xl mt-0.5 shrink-0" aria-hidden="true">
-          📄
-        </span>
-        <div className="min-w-0 flex-1">
-          <p
-            className={`text-sm font-semibold truncate ${
-              isActive ? "text-white" : "text-calming-neutral-text"
-            }`}
-          >
-            {report.name}
-          </p>
-          <p
-            className={`text-xs mt-0.5 ${isActive ? "text-blue-100" : "text-calming-neutral-text"}`}
-            style={{ opacity: isActive ? 0.75 : 0.55 }}
-          >
-            {report.pages} pages · {report.chunks} chunks · {report.size}
-          </p>
-          <p
-            className={`text-xs mt-0.5 ${isActive ? "text-blue-100" : "text-calming-neutral-text"}`}
-            style={{ opacity: isActive ? 0.55 : 0.38 }}
-          >
-            Uploaded {report.uploadedAt}
-          </p>
-        </div>
-      </div>
-    </button>
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor"
+      strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+      <line x1="16" y1="13" x2="8" y2="13" />
+      <line x1="16" y1="17" x2="8" y2="17" />
+      <polyline points="10 9 9 9 8 9" />
+    </svg>
+  );
+}
+
+function IconUpload({ className }: { className?: string }): React.JSX.Element {
+  return (
+    <svg viewBox="0 0 48 48" className={className} fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="6" y="30" width="36" height="12" rx="4" strokeOpacity="0.4" />
+      <path d="M24 28V10" />
+      <path d="M15 19l9-9 9 9" />
+      <circle cx="38" cy="12" r="6" fill="currentColor" fillOpacity="0.12" strokeOpacity="0" />
+      <path d="M35 12h6M38 9v6" strokeOpacity="0.5" />
+    </svg>
+  );
+}
+
+function IconSend({ className }: { className?: string }): React.JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M22 2L11 13" />
+      <path d="M22 2L15 22l-4-9-9-4 20-7z" />
+    </svg>
+  );
+}
+
+function IconChevron({ className }: { className?: string }): React.JSX.Element {
+  return (
+    <svg viewBox="0 0 20 20" className={className} fill="currentColor" aria-hidden="true">
+      <path fillRule="evenodd" clipRule="evenodd"
+        d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" />
+    </svg>
+  );
+}
+
+function IconShield({ className }: { className?: string }): React.JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor"
+      strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+      <path d="M9 12l2 2 4-4" />
+    </svg>
+  );
+}
+
+function IconWarning({ className }: { className?: string }): React.JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+      <line x1="12" y1="9" x2="12" y2="13" />
+      <line x1="12" y1="17" x2="12.01" y2="17" />
+    </svg>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sub-component: Citation accordion (details / summary)
+// Sub-component: Premium Reference Card (replaces <details>)
 // ─────────────────────────────────────────────────────────────────────────────
 
-function CitationAccordion({
-  citations,
-}: {
-  citations: Citation[];
-}): React.JSX.Element {
+function ReferenceCard({ citation }: { citation: Citation }): React.JSX.Element {
+  const [open, setOpen] = useState(false);
   return (
-    <div className="mt-3 space-y-1.5">
-      <p className="text-[10px] font-bold text-healing-green-dark uppercase tracking-widest mb-2">
-        📎 Source Evidence ({citations.length})
-      </p>
-      {citations.map((c) => (
-        <details
-          key={c.chunkId}
-          className="group rounded-lg border border-calming-neutral-border bg-calming-neutral-canvas overflow-hidden"
-        >
-          <summary className="flex items-center justify-between gap-2 px-3 py-2 cursor-pointer text-xs font-medium text-calming-neutral-text select-none list-none hover:bg-calming-neutral-border transition-colors duration-150">
-            <span className="min-w-0 truncate">
-              <span className="font-mono text-oceanic-blue">{c.chunkId}</span>
-              <span
-                className="text-calming-neutral-text ml-1.5"
-                style={{ opacity: 0.45 }}
-              >
-                pg.{c.page} · {c.source}
-              </span>
-            </span>
-            <svg
-              className="w-3.5 h-3.5 shrink-0 text-calming-neutral-text transition-transform duration-200 group-open:rotate-180"
-              style={{ opacity: 0.4 }}
-              viewBox="0 0 20 20"
-              fill="currentColor"
-              aria-hidden="true"
-            >
-              <path
-                fillRule="evenodd"
-                d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
-                clipRule="evenodd"
-              />
-            </svg>
-          </summary>
-          <div className="px-3 pb-3 pt-2 border-t border-calming-neutral-border">
-            <blockquote
-              className="text-xs leading-relaxed text-calming-neutral-text italic pl-3 border-l-2 border-oceanic-blue"
-              style={{ opacity: 0.75 }}
-            >
-              {c.snippet}
-            </blockquote>
-          </div>
-        </details>
-      ))}
+    <div
+      className="rounded-xl border transition-all duration-300 overflow-hidden"
+      style={{
+        background: open ? "rgba(225,245,254,0.55)" : "rgba(255,255,255,0.65)",
+        borderColor: open ? "#0288d1" : "#e1f5fe",
+        boxShadow: open ? "0 2px 12px 0 rgba(2,136,209,0.10)" : "none",
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between gap-3 px-3.5 py-2.5 text-left group"
+      >
+        <div className="flex items-center gap-2.5 min-w-0">
+          <span
+            className="shrink-0 w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold"
+            style={{ background: "#e1f5fe", color: "#0288d1" }}
+          >
+            {citation.page}
+          </span>
+          <span className="font-mono text-[11px] font-semibold text-oceanic-blue truncate">
+            {citation.chunkId}
+          </span>
+          <span className="text-[10px] text-calming-neutral-text hidden sm:block truncate" style={{ opacity: 0.45 }}>
+            {citation.source}
+          </span>
+        </div>
+        <IconChevron
+          className={`w-3.5 h-3.5 shrink-0 text-oceanic-blue transition-transform duration-300 ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      <div
+        className="overflow-hidden transition-all duration-300"
+        style={{ maxHeight: open ? "200px" : "0px", opacity: open ? 1 : 0 }}
+      >
+        <div className="px-3.5 pb-3 pt-0.5 border-t border-oceanic-blue-light">
+          <blockquote
+            className="text-xs leading-relaxed italic pl-3 border-l-2 border-oceanic-blue"
+            style={{ color: "#212529", opacity: 0.72 }}
+          >
+            {citation.snippet}
+          </blockquote>
+        </div>
+      </div>
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sub-component: Single message bubble
+// Sub-component: Message bubble
 // ─────────────────────────────────────────────────────────────────────────────
 
 function MessageBubble({ message }: { message: Message }): React.JSX.Element {
@@ -394,71 +380,87 @@ function MessageBubble({ message }: { message: Message }): React.JSX.Element {
   if (isUser) {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[78%]">
-          <div className="bg-oceanic-blue text-white rounded-2xl rounded-tr-sm px-4 py-3 shadow-sm">
-            <p className="text-sm leading-relaxed">{message.content}</p>
-          </div>
-          <p
-            className="text-right text-[10px] text-calming-neutral-text mt-1 pr-1"
-            style={{ opacity: 0.38 }}
+        <div className="max-w-[76%] flex flex-col items-end gap-1">
+          <div
+            className="rounded-3xl rounded-tr-lg px-5 py-3.5 shadow-sm"
+            style={{
+              background: "linear-gradient(135deg, #e8f5e9 0%, #e1f5fe 100%)",
+              color: "#1b5e20",
+            }}
           >
-            {formatTime(message.timestamp)}
-          </p>
+            <p className="text-sm leading-relaxed font-medium">{message.content}</p>
+          </div>
+          <span className="text-[10px] pr-1" style={{ color: "#212529", opacity: 0.35 }}>
+            You · {formatTime(message.timestamp)}
+          </span>
         </div>
       </div>
     );
   }
 
+  // AI message
   return (
-    <div className="flex justify-start">
-      <div className="max-w-[82%]">
-        {/* Avatar row */}
-        <div className="flex items-center gap-2 mb-1.5">
-          <div className="w-6 h-6 rounded-full bg-healing-green flex items-center justify-center text-white text-[10px] font-bold shrink-0">
-            AI
-          </div>
-          <span className="text-xs font-semibold text-healing-green-dark">
-            Aegis AI
+    <div className="flex justify-start gap-3">
+      {/* Avatar */}
+      <div
+        className="shrink-0 w-8 h-8 rounded-2xl flex items-center justify-center shadow-sm mt-0.5"
+        style={{
+          background: "linear-gradient(135deg, #2e7d32 0%, #0288d1 100%)",
+        }}
+      >
+        <IconShield className="w-4 h-4 text-white" />
+      </div>
+
+      <div className="flex-1 max-w-[80%] flex flex-col gap-2">
+        {/* Label */}
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-bold text-calming-neutral-text" style={{ opacity: 0.7 }}>
+            Medical Assistant
           </span>
-          <span
-            className="text-[10px] text-calming-neutral-text"
-            style={{ opacity: 0.38 }}
-          >
+          <span className="text-[10px] text-calming-neutral-text" style={{ opacity: 0.35 }}>
             {formatTime(message.timestamp)}
           </span>
+          {message.lowConfidence && (
+            <span
+              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold"
+              style={{ background: "#ffebee", color: "#c62828" }}
+            >
+              <IconWarning className="w-2.5 h-2.5" />
+              Low confidence
+            </span>
+          )}
         </div>
 
         {/* Bubble */}
         <div
-          className={[
-            "rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm border",
-            message.lowConfidence
-              ? "bg-vitality-red-light border-vitality-red"
-              : "bg-healing-green-light border-healing-green",
-          ].join(" ")}
-          style={{ borderOpacity: 0.25 }}
+          className="rounded-3xl rounded-tl-lg px-5 py-4 shadow-sm"
+          style={{
+            background: message.lowConfidence
+              ? "rgba(255,235,238,0.85)"
+              : "rgba(255,255,255,0.88)",
+            backdropFilter: "blur(8px)",
+            border: message.lowConfidence
+              ? "1px solid rgba(211,47,47,0.20)"
+              : "1px solid rgba(233,236,239,0.8)",
+          }}
         >
-          {/* Low-confidence inline badge */}
-          {message.lowConfidence && (
-            <div
-              className="flex items-center gap-1.5 mb-2 pb-2 border-b border-vitality-red"
-              style={{ borderOpacity: 0.25 }}
-            >
-              <span className="text-sm" aria-hidden="true">
-                ⚠️
-              </span>
-              <span className="text-xs font-bold text-vitality-red-dark">
-                Low Confidence
-              </span>
-            </div>
-          )}
-
           <p className="text-sm leading-relaxed text-calming-neutral-text">
             {message.content}
           </p>
 
+          {/* Reference cards */}
           {message.citations && message.citations.length > 0 && (
-            <CitationAccordion citations={message.citations} />
+            <div className="mt-4 space-y-2">
+              <p
+                className="text-[10px] font-bold uppercase tracking-widest"
+                style={{ color: "#0288d1", opacity: 0.8 }}
+              >
+                Source References · {message.citations.length} found
+              </p>
+              {message.citations.map((c) => (
+                <ReferenceCard key={c.chunkId} citation={c} />
+              ))}
+            </div>
           )}
         </div>
       </div>
@@ -467,25 +469,32 @@ function MessageBubble({ message }: { message: Message }): React.JSX.Element {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sub-component: Typing indicator (three bouncing dots)
+// Sub-component: Typing indicator
 // ─────────────────────────────────────────────────────────────────────────────
 
 function TypingIndicator(): React.JSX.Element {
   return (
-    <div className="flex justify-start items-end gap-2">
-      <div className="w-6 h-6 rounded-full bg-healing-green flex items-center justify-center text-white text-[10px] font-bold shrink-0">
-        AI
+    <div className="flex justify-start gap-3">
+      <div
+        className="shrink-0 w-8 h-8 rounded-2xl flex items-center justify-center shadow-sm"
+        style={{ background: "linear-gradient(135deg, #2e7d32 0%, #0288d1 100%)" }}
+      >
+        <IconShield className="w-4 h-4 text-white" />
       </div>
       <div
-        className="bg-healing-green-light border border-healing-green rounded-2xl rounded-tl-sm px-4 py-3"
-        style={{ borderOpacity: 0.25 }}
+        className="rounded-3xl rounded-tl-lg px-5 py-4 shadow-sm"
+        style={{
+          background: "rgba(255,255,255,0.88)",
+          backdropFilter: "blur(8px)",
+          border: "1px solid rgba(233,236,239,0.8)",
+        }}
       >
         <div className="flex gap-1.5 items-center h-4">
-          {([0, 150, 300] as const).map((delay) => (
+          {[0, 160, 320].map((delay) => (
             <span
               key={delay}
-              className="w-2 h-2 bg-healing-green rounded-full animate-bounce"
-              style={{ animationDelay: `${delay}ms` }}
+              className="w-2 h-2 rounded-full animate-bounce"
+              style={{ background: "#2e7d32", animationDelay: `${delay}ms` }}
             />
           ))}
         </div>
@@ -495,32 +504,146 @@ function TypingIndicator(): React.JSX.Element {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sub-component: Low-confidence global alert banner
+// Sub-component: Report item card
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ReportItem({
+  report,
+  isActive,
+  onClick,
+}: {
+  report: Report;
+  isActive: boolean;
+  onClick: () => void;
+}): React.JSX.Element {
+  const [hovered, setHovered] = useState(false);
+
+  return (
+    <button
+      id={`report-${report.id}`}
+      type="button"
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      className="w-full text-left rounded-2xl px-4 py-3.5 transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-oceanic-blue"
+      style={{
+        background: isActive
+          ? "linear-gradient(135deg, rgba(46,125,50,0.12) 0%, rgba(2,136,209,0.12) 100%)"
+          : hovered
+          ? "rgba(255,255,255,0.8)"
+          : "rgba(255,255,255,0.5)",
+        border: isActive
+          ? "1.5px solid rgba(2,136,209,0.35)"
+          : "1.5px solid transparent",
+        boxShadow: isActive
+          ? "0 2px 12px 0 rgba(2,136,209,0.12)"
+          : hovered
+          ? "0 2px 8px 0 rgba(0,0,0,0.06)"
+          : "none",
+        transform: hovered && !isActive ? "translateX(2px)" : "none",
+      }}
+    >
+      <div className="flex items-center gap-3">
+        {/* Icon badge */}
+        <div
+          className="shrink-0 w-9 h-9 rounded-xl flex items-center justify-center"
+          style={{
+            background: isActive
+              ? "linear-gradient(135deg, #e8f5e9 0%, #e1f5fe 100%)"
+              : "rgba(241,245,249,0.9)",
+          }}
+        >
+          <IconDocument
+            className="w-5 h-5"
+            style={{ color: isActive ? "#0288d1" : "#64748b" } as React.CSSProperties}
+          />
+        </div>
+
+        {/* Meta */}
+        <div className="min-w-0 flex-1">
+          <p
+            className="text-xs font-semibold truncate"
+            style={{ color: isActive ? "#01579b" : "#212529" }}
+          >
+            {report.name}
+          </p>
+          <p className="text-[10px] mt-0.5 flex items-center gap-1.5" style={{ color: "#212529", opacity: 0.45 }}>
+            <span>{report.pages} pg</span>
+            <span>·</span>
+            <span>{report.chunks} chunks</span>
+            <span>·</span>
+            <span>{report.size}</span>
+          </p>
+        </div>
+
+        {/* Status dot */}
+        <span
+          className="shrink-0 w-2 h-2 rounded-full"
+          style={{ background: report.status === "indexed" ? "#2e7d32" : "#fbc02d" }}
+          title={report.status === "indexed" ? "Indexed" : "Processing"}
+        />
+      </div>
+    </button>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sub-component: Stat tile
+// ─────────────────────────────────────────────────────────────────────────────
+
+function StatTile({
+  value,
+  label,
+  accent,
+}: {
+  value: string;
+  label: string;
+  accent: string;
+}): React.JSX.Element {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <div
+      className="flex-1 rounded-2xl px-4 py-3 flex flex-col items-center gap-0.5 transition-all duration-200"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        background: hovered ? "rgba(255,255,255,0.92)" : "rgba(255,255,255,0.70)",
+        border: `1.5px solid ${accent}30`,
+        boxShadow: hovered ? `0 4px 16px 0 ${accent}22` : "none",
+        transform: hovered ? "translateY(-2px)" : "none",
+      }}
+    >
+      <p className="text-xl font-extrabold" style={{ color: accent }}>{value}</p>
+      <p className="text-[9px] font-bold uppercase tracking-widest" style={{ color: "#212529", opacity: 0.45 }}>
+        {label}
+      </p>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sub-component: Low Confidence Alert
 // ─────────────────────────────────────────────────────────────────────────────
 
 function LowConfidenceAlert(): React.JSX.Element {
   return (
     <div
-      className="mx-4 mb-2 flex items-start gap-3 rounded-xl bg-vitality-red-light border border-vitality-red px-4 py-3"
+      className="mx-4 mb-3 flex items-start gap-3 rounded-2xl px-4 py-3.5"
       role="alert"
       aria-live="polite"
-      style={{ animation: "fadeSlideIn 0.3s ease-out", borderOpacity: 0.35 }}
+      style={{
+        background: "rgba(255,235,238,0.9)",
+        backdropFilter: "blur(8px)",
+        border: "1.5px solid rgba(211,47,47,0.25)",
+        animation: "fadeSlideIn 0.28s ease-out",
+      }}
     >
-      <span className="text-xl mt-0.5 shrink-0" aria-hidden="true">
-        🚨
-      </span>
+      <IconWarning className="w-5 h-5 shrink-0 mt-0.5 text-vitality-red" />
       <div>
-        <p className="text-sm font-bold text-vitality-red-dark">
-          Low Confidence Warning
-        </p>
-        <p
-          className="text-xs text-vitality-red-dark mt-0.5 leading-relaxed"
-          style={{ opacity: 0.8 }}
-        >
-          The AI could not reliably locate an answer in the indexed documents.
-          The retrieved context may be insufficient or unrelated to your query.
-          Please verify with a qualified healthcare professional before acting on
-          this information.
+        <p className="text-sm font-bold text-vitality-red-dark">Low Confidence Response</p>
+        <p className="text-xs text-vitality-red-dark mt-0.5 leading-relaxed" style={{ opacity: 0.75 }}>
+          The assistant could not reliably locate an answer within the indexed documents.
+          Verify this information with a qualified healthcare professional before acting on it.
         </p>
       </div>
     </div>
@@ -528,56 +651,51 @@ function LowConfidenceAlert(): React.JSX.Element {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sub-component: Permanent medical disclaimer bar
+// Sub-component: Medical Disclaimer
 // ─────────────────────────────────────────────────────────────────────────────
 
 function MedicalDisclaimer(): React.JSX.Element {
   return (
     <div
-      className="px-4 py-2.5 flex items-start gap-2 bg-gentle-yellow-light border-t border-gentle-yellow"
+      className="px-4 py-3 flex items-start gap-2.5"
       role="note"
       aria-label="Medical disclaimer"
-      style={{ borderOpacity: 0.5 }}
+      style={{
+        background: "linear-gradient(90deg, rgba(255,253,231,0.9) 0%, rgba(255,255,255,0.6) 100%)",
+        borderTop: "1px solid rgba(251,192,45,0.35)",
+      }}
     >
-      <span className="text-base mt-0.5 shrink-0" aria-hidden="true">
-        ⚕️
-      </span>
+      <span className="text-gentle-yellow shrink-0 mt-0.5">⚕️</span>
       <p className="text-[10.5px] leading-relaxed text-gentle-yellow-dark">
-        <strong>Medical Disclaimer:</strong> This AI tool is for informational
-        and educational purposes only. It does not constitute professional
-        medical advice, diagnosis, or treatment. Always consult a qualified
-        healthcare professional for any medical decisions.
+        <strong>Educational Use Only.</strong> This tool does not constitute professional
+        medical advice, diagnosis, or treatment. Always consult a qualified healthcare
+        professional before making any medical decisions.
       </p>
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Page component (default export)
+// Page component
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function Home(): React.JSX.Element {
-  // ── State ──────────────────────────────────────────────────────────────────
   const [reports] = useState<Report[]>(SEED_REPORTS);
   const [activeReportId, setActiveReportId] = useState<string>("r1");
   const [messages, setMessages] = useState<Message[]>(SEED_MESSAGES);
   const [inputValue, setInputValue] = useState<string>("");
   const [isTyping, setIsTyping] = useState<boolean>(false);
-  const [showLowConfidenceAlert, setShowLowConfidenceAlert] =
-    useState<boolean>(false);
+  const [showLowConfidenceAlert, setShowLowConfidenceAlert] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [replyIndex, setReplyIndex] = useState<number>(0);
 
-  // ── Refs ───────────────────────────────────────────────────────────────────
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // ── Auto-scroll to bottom on new messages ─────────────────────────────────
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
 
-  // ── Send handler ───────────────────────────────────────────────────────────
   const sendMessage = useCallback(async () => {
     const text = inputValue.trim();
     if (!text || isTyping) return;
@@ -589,15 +707,13 @@ export default function Home(): React.JSX.Element {
       lowConfidence: false,
       timestamp: new Date(),
     };
-
     setMessages((prev) => [...prev, userMsg]);
     setInputValue("");
     setIsTyping(true);
     setShowLowConfidenceAlert(false);
 
-    // Simulate network / inference latency
     await new Promise<void>((resolve) =>
-      setTimeout(resolve, 1200 + Math.random() * 900)
+      setTimeout(resolve, 1100 + Math.random() * 900)
     );
 
     const reply = AI_REPLY_POOL[replyIndex % AI_REPLY_POOL.length];
@@ -611,16 +727,11 @@ export default function Home(): React.JSX.Element {
       lowConfidence: reply.lowConfidence,
       timestamp: new Date(),
     };
-
     setMessages((prev) => [...prev, aiMsg]);
     setIsTyping(false);
-
-    if (reply.lowConfidence) {
-      setShowLowConfidenceAlert(true);
-    }
+    if (reply.lowConfidence) setShowLowConfidenceAlert(true);
   }, [inputValue, isTyping, replyIndex]);
 
-  // ── Keyboard shortcut: Enter to send, Shift+Enter for newline ─────────────
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -628,161 +739,230 @@ export default function Home(): React.JSX.Element {
     }
   };
 
-  // ── Drag-and-drop handlers (UI feedback only) ─────────────────────────────
   const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setIsDragging(true);
   };
-  const handleDragLeave = () => setIsDragging(false);
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setIsDragging(false);
-  };
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Render
-  // ─────────────────────────────────────────────────────────────────────────
+  // Total stats
+  const totalChunks = reports.reduce((s, r) => s + r.chunks, 0);
+  const totalPages = reports.reduce((s, r) => s + r.pages, 0);
+
   return (
     <>
-      {/* ── Global keyframe animations ─────────────────────────────────────── */}
+      {/* ── Keyframe animations ──────────────────────────────────────────── */}
       <style>{`
         @keyframes ecgDraw {
-          0%   { stroke-dasharray: 300; stroke-dashoffset: 300; opacity: 0.5; }
+          0%   { stroke-dasharray: 300; stroke-dashoffset: 300; opacity: 0.45; }
           40%  { opacity: 1; }
           80%  { stroke-dashoffset: 0; }
-          100% { stroke-dashoffset: 0; opacity: 0.5; }
+          100% { stroke-dashoffset: 0; opacity: 0.45; }
         }
         @keyframes fadeSlideIn {
-          from { opacity: 0; transform: translateY(-8px); }
-          to   { opacity: 1; transform: translateY(0);    }
+          from { opacity: 0; transform: translateY(-10px) scale(0.98); }
+          to   { opacity: 1; transform: translateY(0) scale(1); }
         }
-        @keyframes popIn {
-          from { opacity: 0; transform: scale(0.96) translateY(6px); }
-          to   { opacity: 1; transform: scale(1)    translateY(0);   }
+        @keyframes msgPop {
+          from { opacity: 0; transform: translateY(8px) scale(0.97); }
+          to   { opacity: 1; transform: translateY(0) scale(1); }
         }
-        .msg-in { animation: popIn 0.22s ease-out; }
+        @keyframes pulseRing {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50%       { opacity: 0.6; transform: scale(1.15); }
+        }
+        .msg-pop    { animation: msgPop 0.24s cubic-bezier(0.22,1,0.36,1); }
+        .pulse-ring { animation: pulseRing 2s ease-in-out infinite; }
         details summary::-webkit-details-marker { display: none; }
+        * { box-sizing: border-box; }
       `}</style>
 
-      <div className="flex flex-col min-h-screen bg-calming-neutral-canvas">
+      {/* ── Canvas ───────────────────────────────────────────────────────── */}
+      <div
+        className="flex flex-col min-h-screen"
+        style={{
+          background:
+            "linear-gradient(145deg, #f0fdf4 0%, #ecfeff 35%, #e1f5fe 65%, #f0fdf4 100%)",
+          fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif",
+        }}
+      >
 
-        {/* ══════════════════════════════════════════════════════════════════
+        {/* ════════════════════════════════════════════════════════════════
             HEADER
-        ══════════════════════════════════════════════════════════════════ */}
+        ════════════════════════════════════════════════════════════════ */}
         <header
-          className="sticky top-0 z-30 bg-calming-neutral-card border-b border-calming-neutral-border shadow-sm"
+          className="sticky top-0 z-30"
           role="banner"
+          style={{
+            background: "rgba(255,255,255,0.75)",
+            backdropFilter: "blur(20px) saturate(1.4)",
+            borderBottom: "1px solid rgba(233,236,239,0.7)",
+            boxShadow: "0 1px 24px 0 rgba(46,125,50,0.07)",
+          }}
         >
-          <div className="max-w-screen-xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+          <div className="max-w-screen-xl mx-auto px-5 sm:px-8 h-16 flex items-center justify-between gap-4">
 
-            {/* Branding */}
-            <div className="flex items-center gap-3">
-              <div className="text-vitality-red shrink-0">
-                <EcgPulseIcon />
+            {/* Brand */}
+            <div className="flex items-center gap-4">
+              <div
+                className="w-9 h-9 rounded-2xl flex items-center justify-center shadow-sm shrink-0"
+                style={{ background: "linear-gradient(135deg, #2e7d32, #0288d1)" }}
+              >
+                <IconShield className="w-5 h-5 text-white" />
               </div>
               <div>
-                <h1 className="text-base font-bold text-oceanic-blue leading-tight tracking-tight">
-                  Aegis RAG
-                </h1>
-                <p
-                  className="text-[11px] text-calming-neutral-text leading-tight"
-                  style={{ opacity: 0.5 }}
+                <h1
+                  className="text-sm font-extrabold leading-tight tracking-tight"
+                  style={{ color: "#01579b" }}
                 >
                   Medical Intelligence Hub
-                </p>
+                </h1>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <IconEcg className="w-14 h-4 text-vitality-red" />
+                  <span
+                    className="text-[10px] font-medium"
+                    style={{ color: "#212529", opacity: 0.45 }}
+                  >
+                    RAG · llama-3.3-70b-versatile
+                  </span>
+                </div>
               </div>
             </div>
 
-            {/* Status pills */}
+            {/* Status indicators */}
             <div className="flex items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-healing-green-light px-3 py-1 text-xs font-semibold text-healing-green-dark">
-                <span className="w-1.5 h-1.5 rounded-full bg-healing-green animate-pulse" />
-                RAG Online
-              </span>
-              <span className="hidden sm:inline-flex items-center gap-1.5 rounded-full bg-oceanic-blue-light px-3 py-1 text-xs font-semibold text-oceanic-blue-dark">
-                llama-3.3-70b · Groq
-              </span>
+              <div
+                className="hidden sm:flex items-center gap-1.5 rounded-full px-3.5 py-1.5"
+                style={{
+                  background: "rgba(232,245,233,0.85)",
+                  border: "1px solid rgba(46,125,50,0.2)",
+                }}
+              >
+                <span
+                  className="w-1.5 h-1.5 rounded-full pulse-ring"
+                  style={{ background: "#2e7d32" }}
+                />
+                <span className="text-[11px] font-semibold text-healing-green-dark">
+                  RAG Online
+                </span>
+              </div>
+              <div
+                className="hidden md:flex items-center gap-1.5 rounded-full px-3.5 py-1.5"
+                style={{
+                  background: "rgba(225,245,254,0.85)",
+                  border: "1px solid rgba(2,136,209,0.2)",
+                }}
+              >
+                <span className="text-[11px] font-semibold text-oceanic-blue-dark">
+                  Groq Inference
+                </span>
+              </div>
             </div>
           </div>
         </header>
 
-        {/* ══════════════════════════════════════════════════════════════════
-            BODY (sidebar + chat panel)
-        ══════════════════════════════════════════════════════════════════ */}
-        <div className="flex-1 max-w-screen-xl mx-auto w-full px-4 sm:px-6 py-5 flex gap-5 min-h-0"
-          style={{ height: "calc(100vh - 4rem)" }}
+        {/* ════════════════════════════════════════════════════════════════
+            MAIN BODY
+        ════════════════════════════════════════════════════════════════ */}
+        <div
+          className="flex-1 max-w-screen-xl mx-auto w-full px-4 sm:px-8 py-6 flex gap-5"
+          style={{ minHeight: 0, height: "calc(100vh - 4rem)" }}
         >
 
-          {/* ── LEFT SIDEBAR ─────────────────────────────────────────────── */}
+          {/* ── LEFT PANEL ──────────────────────────────────────────────── */}
           <aside
-            className="hidden lg:flex flex-col w-72 shrink-0 gap-4 overflow-y-auto"
-            aria-label="Document sidebar"
+            className="hidden lg:flex flex-col w-[17.5rem] shrink-0 gap-4"
+            aria-label="Document panel"
           >
 
-            {/* PDF Drop-zone */}
+            {/* Upload Zone Card */}
             <div
               id="pdf-dropzone"
-              role="region"
-              aria-label="PDF upload drop zone"
               onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onDrop={handleDrop}
-              className={[
-                "rounded-2xl border-2 border-dashed p-6 flex flex-col items-center gap-2 text-center cursor-pointer transition-all duration-200 shrink-0",
-                isDragging
-                  ? "border-oceanic-blue bg-oceanic-blue-light scale-[1.02]"
-                  : "border-calming-neutral-border bg-calming-neutral-card hover:border-oceanic-blue",
-              ].join(" ")}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={(e) => { e.preventDefault(); setIsDragging(false); }}
+              className="rounded-3xl p-5 flex flex-col items-center gap-3 text-center cursor-pointer transition-all duration-250 shrink-0"
+              style={{
+                background: isDragging
+                  ? "linear-gradient(135deg, rgba(232,245,233,0.95) 0%, rgba(225,245,254,0.95) 100%)"
+                  : "rgba(255,255,255,0.75)",
+                backdropFilter: "blur(12px)",
+                border: isDragging
+                  ? "2px solid rgba(2,136,209,0.55)"
+                  : "2px dashed rgba(2,136,209,0.28)",
+                boxShadow: isDragging
+                  ? "0 8px 32px 0 rgba(2,136,209,0.18)"
+                  : "0 2px 16px 0 rgba(0,0,0,0.05)",
+                transform: isDragging ? "scale(1.02)" : "scale(1)",
+              }}
             >
-              <span
-                className={`text-4xl transition-transform duration-200 ${isDragging ? "scale-125" : ""}`}
-                aria-hidden="true"
+              <div
+                className="w-14 h-14 rounded-2xl flex items-center justify-center"
+                style={{
+                  background: "linear-gradient(135deg, #e8f5e9 0%, #e1f5fe 100%)",
+                }}
               >
-                📂
-              </span>
-              <p className="text-sm font-semibold text-calming-neutral-text">
-                Drop PDF reports here
-              </p>
+                <IconUpload
+                  className="w-8 h-8"
+                  style={{ color: isDragging ? "#0288d1" : "#2e7d32" } as React.CSSProperties}
+                />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-calming-neutral-text">
+                  Drop PDF reports here
+                </p>
+                <p className="text-xs mt-1" style={{ color: "#212529", opacity: 0.48 }}>
+                  or{" "}
+                  <label className="text-oceanic-blue underline cursor-pointer hover:text-oceanic-blue-dark transition-colors">
+                    browse files
+                    <input
+                      type="file"
+                      id="file-upload-input"
+                      accept=".pdf"
+                      multiple
+                      className="sr-only"
+                    />
+                  </label>
+                </p>
+              </div>
               <p
-                className="text-xs text-calming-neutral-text"
-                style={{ opacity: 0.5 }}
+                className="text-[10px] font-medium rounded-full px-3 py-1"
+                style={{
+                  background: "rgba(225,245,254,0.7)",
+                  color: "#0288d1",
+                }}
               >
-                or{" "}
-                <label className="text-oceanic-blue underline cursor-pointer hover:text-oceanic-blue-dark transition-colors">
-                  browse files
-                  <input
-                    type="file"
-                    id="file-upload-input"
-                    accept=".pdf"
-                    multiple
-                    className="sr-only"
-                  />
-                </label>
-              </p>
-              <p
-                className="text-[10px] text-calming-neutral-text mt-1"
-                style={{ opacity: 0.3 }}
-              >
-                Max 50 MB per file · PDF only
+                PDF · Max 50 MB
               </p>
             </div>
 
-            {/* Indexed report list */}
-            <div className="flex-1 rounded-2xl bg-calming-neutral-card border border-calming-neutral-border p-4 flex flex-col gap-3">
-              <div className="flex items-center justify-between shrink-0">
+            {/* Report list card */}
+            <div
+              className="flex-1 rounded-3xl p-4 flex flex-col gap-3 overflow-hidden"
+              style={{
+                background: "rgba(255,255,255,0.72)",
+                backdropFilter: "blur(12px)",
+                border: "1px solid rgba(233,236,239,0.8)",
+                boxShadow: "0 2px 20px 0 rgba(0,0,0,0.05)",
+              }}
+            >
+              <div className="flex items-center justify-between px-1 shrink-0">
                 <h2
-                  className="text-[10px] font-bold text-calming-neutral-text uppercase tracking-widest"
-                  style={{ opacity: 0.6 }}
+                  className="text-[10px] font-extrabold uppercase tracking-widest"
+                  style={{ color: "#212529", opacity: 0.5 }}
                 >
-                  Indexed Reports
+                  Indexed Documents
                 </h2>
-                <span className="text-xs bg-oceanic-blue-light text-oceanic-blue-dark font-bold px-2 py-0.5 rounded-full">
+                <span
+                  className="text-[10px] font-bold rounded-full px-2 py-0.5"
+                  style={{ background: "#e1f5fe", color: "#0288d1" }}
+                >
                   {reports.length}
                 </span>
               </div>
-              <div className="flex flex-col gap-2">
+
+              <div className="flex flex-col gap-1.5 overflow-y-auto flex-1">
                 {reports.map((r) => (
-                  <ReportCard
+                  <ReportItem
                     key={r.id}
                     report={r}
                     isActive={activeReportId === r.id}
@@ -792,106 +972,88 @@ export default function Home(): React.JSX.Element {
               </div>
             </div>
 
-            {/* Stats grid */}
-            <div className="rounded-2xl bg-calming-neutral-card border border-calming-neutral-border p-4 grid grid-cols-2 gap-3 shrink-0">
-              <div className="text-center p-2 rounded-xl bg-oceanic-blue-light">
-                <p className="text-lg font-bold text-oceanic-blue">86</p>
-                <p
-                  className="text-[9px] text-oceanic-blue-dark font-semibold uppercase tracking-wider"
-                  style={{ opacity: 0.7 }}
-                >
-                  Chunks
-                </p>
-              </div>
-              <div className="text-center p-2 rounded-xl bg-healing-green-light">
-                <p className="text-lg font-bold text-healing-green-dark">22</p>
-                <p
-                  className="text-[9px] text-healing-green-dark font-semibold uppercase tracking-wider"
-                  style={{ opacity: 0.7 }}
-                >
-                  Pages
-                </p>
-              </div>
-              <div className="text-center p-2 rounded-xl bg-gentle-yellow-light">
-                <p className="text-lg font-bold text-gentle-yellow-dark">3</p>
-                <p
-                  className="text-[9px] text-gentle-yellow-dark font-semibold uppercase tracking-wider"
-                  style={{ opacity: 0.7 }}
-                >
-                  Docs
-                </p>
-              </div>
-              <div className="text-center p-2 rounded-xl bg-vitality-red-light">
-                <p className="text-lg font-bold text-vitality-red-dark">
-                  8.4<span className="text-xs">MB</span>
-                </p>
-                <p
-                  className="text-[9px] text-vitality-red-dark font-semibold uppercase tracking-wider"
-                  style={{ opacity: 0.7 }}
-                >
-                  Size
-                </p>
-              </div>
+            {/* Stats tiles row */}
+            <div className="flex gap-2 shrink-0">
+              <StatTile value={String(totalChunks)} label="Chunks" accent="#0288d1" />
+              <StatTile value={String(totalPages)} label="Pages" accent="#2e7d32" />
+              <StatTile value={String(reports.length)} label="Docs" accent="#f57f17" />
             </div>
           </aside>
 
-          {/* ── MAIN CHAT PANEL ──────────────────────────────────────────── */}
+          {/* ── CHAT PANEL ───────────────────────────────────────────────── */}
           <main
             id="chat-panel"
-            className="flex-1 flex flex-col bg-calming-neutral-card rounded-2xl border border-calming-neutral-border shadow-sm overflow-hidden"
+            className="flex-1 flex flex-col rounded-3xl overflow-hidden"
             aria-label="Chat interface"
+            style={{
+              background: "rgba(255,255,255,0.68)",
+              backdropFilter: "blur(20px) saturate(1.3)",
+              border: "1px solid rgba(233,236,239,0.75)",
+              boxShadow:
+                "0 4px 40px 0 rgba(2,136,209,0.08), 0 1px 4px 0 rgba(0,0,0,0.04)",
+            }}
           >
             {/* Chat top bar */}
-            <div className="flex items-center justify-between px-5 py-3 border-b border-calming-neutral-border bg-calming-neutral-canvas shrink-0">
+            <div
+              className="flex items-center justify-between px-6 py-4 shrink-0"
+              style={{
+                background:
+                  "linear-gradient(90deg, rgba(232,245,233,0.55) 0%, rgba(225,245,254,0.55) 100%)",
+                borderBottom: "1px solid rgba(233,236,239,0.65)",
+              }}
+            >
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-full bg-healing-green flex items-center justify-center text-white text-xs font-bold shrink-0">
-                  AI
+                <div
+                  className="w-10 h-10 rounded-2xl flex items-center justify-center shadow-md shrink-0"
+                  style={{
+                    background: "linear-gradient(135deg, #2e7d32 0%, #0288d1 100%)",
+                  }}
+                >
+                  <IconShield className="w-5 h-5 text-white" />
                 </div>
                 <div>
-                  <p className="text-sm font-bold text-calming-neutral-text">
-                    Aegis AI
+                  <p className="text-sm font-extrabold" style={{ color: "#01579b" }}>
+                    Medical Assistant
                   </p>
                   <p
-                    className="text-[10px] text-calming-neutral-text"
-                    style={{ opacity: 0.45 }}
+                    className="text-[10px]"
+                    style={{ color: "#212529", opacity: 0.42 }}
                   >
-                    llama-3.3-70b-versatile · Groq Inference API
+                    Powered by llama-3.3-70b-versatile · Groq
                   </p>
                 </div>
               </div>
               <div className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-healing-green animate-pulse" />
-                <span className="text-xs font-semibold text-healing-green-dark">
-                  Active
-                </span>
+                <span
+                  className="w-2 h-2 rounded-full pulse-ring"
+                  style={{ background: "#2e7d32" }}
+                />
+                <span className="text-xs font-semibold text-healing-green-dark">Active</span>
               </div>
             </div>
 
-            {/* Messages scroll area */}
+            {/* Messages area */}
             <div
               id="messages-area"
-              className="flex-1 overflow-y-auto px-5 py-5 space-y-4 min-h-0"
+              className="flex-1 overflow-y-auto px-6 py-5 space-y-5 min-h-0"
               aria-live="polite"
               aria-relevant="additions"
             >
               {messages.map((msg) => (
-                <div key={msg.id} className="msg-in">
+                <div key={msg.id} className="msg-pop">
                   <MessageBubble message={msg} />
                 </div>
               ))}
-
               {isTyping && <TypingIndicator />}
-
-              {/* Bottom scroll anchor */}
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Low confidence global alert */}
+            {/* Low confidence alert */}
             {showLowConfidenceAlert && <LowConfidenceAlert />}
 
-            {/* Input + disclaimer area */}
-            <div className="shrink-0 border-t border-calming-neutral-border">
-              <div className="px-4 pt-3 pb-1 flex gap-2 items-end">
+            {/* Input zone */}
+            <div className="shrink-0" style={{ borderTop: "1px solid rgba(233,236,239,0.65)" }}>
+              <div className="px-5 pt-4 pb-2 flex gap-3 items-end">
                 <textarea
                   ref={inputRef}
                   id="chat-input"
@@ -902,7 +1064,21 @@ export default function Home(): React.JSX.Element {
                   rows={2}
                   disabled={isTyping}
                   aria-label="Chat input"
-                  className="flex-1 resize-none rounded-xl border border-calming-neutral-border bg-calming-neutral-canvas px-4 py-3 text-sm text-calming-neutral-text focus:outline-none focus:ring-2 focus:ring-oceanic-blue focus:border-transparent transition-all duration-150 disabled:opacity-50"
+                  className="flex-1 resize-none rounded-2xl px-4 py-3 text-sm transition-all duration-200 disabled:opacity-50 focus:outline-none"
+                  style={{
+                    background: "rgba(248,249,250,0.85)",
+                    border: "1.5px solid rgba(233,236,239,0.9)",
+                    color: "#212529",
+                    boxShadow: "inset 0 1px 3px 0 rgba(0,0,0,0.04)",
+                  }}
+                  onFocus={(e) => {
+                    e.currentTarget.style.border = "1.5px solid rgba(2,136,209,0.55)";
+                    e.currentTarget.style.boxShadow = "0 0 0 3px rgba(2,136,209,0.10)";
+                  }}
+                  onBlur={(e) => {
+                    e.currentTarget.style.border = "1.5px solid rgba(233,236,239,0.9)";
+                    e.currentTarget.style.boxShadow = "inset 0 1px 3px 0 rgba(0,0,0,0.04)";
+                  }}
                 />
 
                 {/* Send button */}
@@ -912,53 +1088,58 @@ export default function Home(): React.JSX.Element {
                   onClick={sendMessage}
                   disabled={!inputValue.trim() || isTyping}
                   aria-label="Send message"
-                  className="shrink-0 w-11 h-11 rounded-xl bg-oceanic-blue text-white flex items-center justify-center hover:bg-oceanic-blue-dark active:scale-95 transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-oceanic-blue focus-visible:ring-offset-2"
+                  className="shrink-0 w-12 h-12 rounded-2xl flex items-center justify-center transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-oceanic-blue focus-visible:ring-offset-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                  style={{
+                    background: "linear-gradient(135deg, #2e7d32 0%, #0288d1 100%)",
+                    boxShadow: "0 4px 14px 0 rgba(2,136,209,0.30)",
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!e.currentTarget.disabled) {
+                      e.currentTarget.style.boxShadow = "0 6px 20px 0 rgba(2,136,209,0.40)";
+                      e.currentTarget.style.transform = "translateY(-1px)";
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.boxShadow = "0 4px 14px 0 rgba(2,136,209,0.30)";
+                    e.currentTarget.style.transform = "none";
+                  }}
                 >
-                  <svg
-                    viewBox="0 0 24 24"
-                    className="w-5 h-5"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    aria-hidden="true"
-                  >
-                    <path d="M22 2L11 13" />
-                    <path d="M22 2L15 22l-4-9-9-4 20-7z" />
-                  </svg>
+                  <IconSend className="w-5 h-5 text-white" />
                 </button>
               </div>
 
               {/* Keyboard hint */}
-              <div className="px-4 pb-2 flex items-center gap-1">
+              <div className="px-5 pb-2 flex items-center gap-1.5">
                 <kbd
-                  className="text-[10px] text-calming-neutral-text bg-calming-neutral-canvas border border-calming-neutral-border rounded px-1.5 py-0.5 font-mono"
-                  style={{ opacity: 0.45 }}
+                  className="text-[10px] rounded px-1.5 py-0.5 font-mono"
+                  style={{
+                    background: "rgba(233,236,239,0.7)",
+                    color: "#212529",
+                    opacity: 0.5,
+                    border: "1px solid rgba(233,236,239,0.9)",
+                  }}
                 >
                   Enter
                 </kbd>
-                <span
-                  className="text-[10px] text-calming-neutral-text"
-                  style={{ opacity: 0.35 }}
-                >
-                  to send ·
+                <span className="text-[10px]" style={{ color: "#212529", opacity: 0.35 }}>
+                  send ·
                 </span>
                 <kbd
-                  className="text-[10px] text-calming-neutral-text bg-calming-neutral-canvas border border-calming-neutral-border rounded px-1.5 py-0.5 font-mono"
-                  style={{ opacity: 0.45 }}
+                  className="text-[10px] rounded px-1.5 py-0.5 font-mono"
+                  style={{
+                    background: "rgba(233,236,239,0.7)",
+                    color: "#212529",
+                    opacity: 0.5,
+                    border: "1px solid rgba(233,236,239,0.9)",
+                  }}
                 >
                   Shift+Enter
                 </kbd>
-                <span
-                  className="text-[10px] text-calming-neutral-text"
-                  style={{ opacity: 0.35 }}
-                >
-                  for new line
+                <span className="text-[10px]" style={{ color: "#212529", opacity: 0.35 }}>
+                  new line
                 </span>
               </div>
 
-              {/* Permanent medical disclaimer */}
               <MedicalDisclaimer />
             </div>
           </main>
